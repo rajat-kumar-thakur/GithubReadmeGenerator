@@ -7,8 +7,10 @@ import { Toaster } from '@/components/ui/sonner';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'AI README Generator',
-  description: 'Generate professional README files for GitHub repositories using AI',
+  title: 'Github README Generator',
+  icons: {
+    icon: '/github.ico', // Correct path for favicon in public directory
+  },
 };
 
 export default function RootLayout({
