@@ -2,19 +2,13 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { ThemeProvider } from '@/components/theme-provider';
+import { Toaster } from '@/components/ui/sonner';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'AI README Generator - Transform GitHub repos into beautiful documentation',
-  description: 'Generate professional README files for your GitHub repositories using AI. Just paste your repo URL and get comprehensive documentation instantly.',
-  keywords: ['README', 'GitHub', 'AI', 'documentation', 'generator', 'markdown'],
-  authors: [{ name: 'AI README Generator' }],
-  openGraph: {
-    title: 'AI README Generator',
-    description: 'Transform GitHub repositories into beautiful README files using AI',
-    type: 'website',
-  },
+  title: 'AI README Generator',
+  description: 'Generate professional README files for GitHub repositories using AI',
 };
 
 export default function RootLayout({
@@ -32,6 +26,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

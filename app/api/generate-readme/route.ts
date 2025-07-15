@@ -1,141 +1,143 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(request: NextRequest) {
   try {
-    const { githubUrl, customPrompt } = await request.json();
+    const body = await request.json();
+    const { repositoryData, customPrompt } = body;
 
-    if (!githubUrl) {
-      return NextResponse.json({ error: 'GitHub URL is required' }, { status: 400 });
+    if (!repositoryData) {
+      return NextResponse.json(
+        { error: 'Repository data is required' },
+        { status: 400 }
+      );
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json(
+        { error: 'Gemini API key is not configured' },
+        { status: 401 }
+      );
     }
 
-    // Extract owner and repo from GitHub URL
-    const match = githubUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-    if (!match) {
-      return NextResponse.json({ error: 'Invalid GitHub URL' }, { status: 400 });
+    // Create a comprehensive prompt for README generation
+    const systemPrompt = `You are an expert technical writer specializing in creating comprehensive, professional README files for GitHub repositories. Your task is to analyze the provided repository data and generate a well-structured, informative README.md file.
+
+Guidelines:
+- Create a professional, comprehensive README that follows best practices
+- Include relevant badges for the project (shields.io format)
+- Structure the content with clear sections and proper markdown formatting
+- Generate realistic code examples based on the repository's language and structure
+- Include installation instructions, usage examples, and API documentation where appropriate
+- Make the README engaging and informative for developers
+- Use proper markdown syntax with code blocks, tables, and formatting
+- Include contributing guidelines and license information
+- Add a table of contents for longer READMEs
+- Focus on clarity and usefulness for developers who want to understand and use the project
+- Generate content that is specific to the repository, not generic templates`;
+
+    const userPrompt = `Please generate a comprehensive README.md file for this GitHub repository:
+
+Repository Information:
+- Name: ${repositoryData.name}
+- Description: ${repositoryData.description || 'No description provided'}
+- Language: ${repositoryData.language}
+- Stars: ${repositoryData.stars}
+- Forks: ${repositoryData.forks}
+- License: ${repositoryData.license || 'No license specified'}
+- Topics: ${repositoryData.topics?.join(', ') || 'None'}
+- Owner: ${repositoryData.owner}
+
+Repository Structure:
+${repositoryData.structure?.map((item: any) => `- ${item.type === 'dir' ? '📁' : '📄'} ${item.name}`).join('\n') || 'Structure not available'}
+
+Main Files:
+${repositoryData.mainFiles?.join(', ') || 'No main files identified'}
+
+Dependencies:
+${Object.keys(repositoryData.dependencies || {}).slice(0, 10).join(', ') || 'No dependencies found'}
+
+${repositoryData.readme ? `Existing README (for reference, but create a new one):
+${repositoryData.readme.substring(0, 1000)}...` : 'No existing README found'}
+
+${customPrompt ? `Additional Instructions:
+${customPrompt}` : ''}
+
+Please generate a complete, professional README.md file that would be suitable for this repository. Make it comprehensive but not overly verbose, and ensure it's well-formatted with proper markdown syntax. Include relevant badges, clear installation instructions, usage examples, and all necessary sections for a professional open-source project.
+
+The format output should be .md no unecessary details should be added
+
+dont add md''' please`;
+
+    // Get the generative model
+    const model = genAI.getGenerativeModel({ 
+      model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.95,
+        maxOutputTokens: 4096,
+      },
+    });
+
+    // Combine system and user prompts
+    const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+
+    // Generate content
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    const generatedReadme = response.text();
+
+    if (!generatedReadme) {
+      throw new Error('Failed to generate README content');
     }
-
-    const [, owner, repo] = match;
-
-    // Fetch repository information
-    const repoResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
-    if (!repoResponse.ok) {
-      return NextResponse.json({ error: 'Repository not found or not accessible' }, { status: 404 });
-    }
-
-    const repoData = await repoResponse.json();
-
-    // Fetch repository contents
-    const contentsResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents`);
-    if (!contentsResponse.ok) {
-      return NextResponse.json({ error: 'Failed to fetch repository contents' }, { status: 500 });
-    }
-
-    const contents = await contentsResponse.json();
-
-    // Fetch specific files that are important for README generation
-    const importantFiles = ['package.json', 'requirements.txt', 'Cargo.toml', 'go.mod', 'pom.xml', 'composer.json', 'Gemfile', 'setup.py'];
-    const fileContents: Record<string, string> = {};
-
-    for (const file of contents) {
-      if (importantFiles.includes(file.name) && file.type === 'file') {
-        try {
-          const fileResponse = await fetch(file.download_url);
-          if (fileResponse.ok) {
-            const content = await fileResponse.text();
-            // Limit file content size to prevent token overflow
-            fileContents[file.name] = content.length > 2000 ? content.substring(0, 2000) + '...' : content;
-          }
-        } catch (error) {
-          console.error(`Error fetching ${file.name}:`, error);
-        }
-      }
-    }
-
-    // Generate README using OpenAI
-    const readme = await generateReadmeWithOpenAI(repoData, contents, fileContents, customPrompt);
 
     return NextResponse.json({
-      readme,
-      repoInfo: {
-        name: repoData.name,
-        owner: repoData.owner.login,
-        description: repoData.description,
-        language: repoData.language,
-        stars: repoData.stargazers_count,
+      readme: generatedReadme,
+      usage: {
+        prompt_tokens: fullPrompt.length,
+        completion_tokens: generatedReadme.length,
+        total_tokens: fullPrompt.length + generatedReadme.length,
       },
     });
 
   } catch (error) {
-    console.error('Error generating README:', error);
-    return NextResponse.json({ 
-      error: error instanceof Error ? error.message : 'Internal server error' 
-    }, { status: 500 });
-  }
-}
+    console.error('Gemini API Error:', error);
+    
+    if (error instanceof Error) {
+      // Handle specific Gemini API errors
+      if (error.message.includes('API key')) {
+        return NextResponse.json(
+          { error: 'Gemini API key is not configured or invalid' },
+          { status: 401 }
+        );
+      }
+      
+      if (error.message.includes('quota') || error.message.includes('limit')) {
+        return NextResponse.json(
+          { error: 'Gemini API quota exceeded. Please check your usage limits.' },
+          { status: 429 }
+        );
+      }
 
-async function generateReadmeWithOpenAI(
-  repoData: any, 
-  contents: any[], 
-  fileContents: Record<string, string>, 
-  customPrompt: string
-): Promise<string> {
-  const { name, description, language, owner } = repoData;
-  const files = contents.filter(item => item.type === 'file').map(item => item.name);
+      if (error.message.includes('SAFETY')) {
+        return NextResponse.json(
+          { error: 'Content was blocked by Gemini safety filters. Please try with different repository data.' },
+          { status: 400 }
+        );
+      }
+      
+      return NextResponse.json(
+        { error: `Gemini API Error: ${error.message}` },
+        { status: 500 }
+      );
+    }
 
-  // Create a comprehensive prompt for OpenAI
-  const systemPrompt = `You are an expert technical writer specializing in creating comprehensive, professional README files for GitHub repositories. Your task is to analyze the provided repository information and generate a well-structured, informative README.md file.
-
-Guidelines:
-- Create a professional, comprehensive README that follows best practices
-- Include appropriate sections like Overview, Features, Installation, Usage, etc.
-- Use proper markdown formatting with code blocks, badges, and structure
-- Use emojis sparingly and professionally
-- Ensure the README is production-ready and comprehensive`;
-
-  const userPrompt = `Generate a comprehensive README.md file for this GitHub repository:
-- Infer the project's purpose and functionality from the available information
-**Repository Information:**
-- Name: ${name}
-- Owner: ${owner.login}
-- Description: ${description || 'No description provided'}
-- Primary Language: ${language || 'Not specified'}
-- Stars: ${repoData.stargazers_count || 0}
-- Include installation instructions based on the detected technology stack
-**File Structure:**
-${files.slice(0, 20).join(', ')}${files.length > 20 ? ` and ${files.length - 20} more files` : ''}
-- Add usage examples when possible
-**Key Configuration Files:**
-${Object.entries(fileContents).map(([filename, content]) => 
-  `\n--- ${filename} ---\n${content}`
-).join('\n')}
-- Include contribution guidelines and license information
-${customPrompt ? `\n**Custom Requirements:**\n${customPrompt}` : ''}
-- Make it engaging and easy to understand for both technical and non-technical users
-Please generate a complete, professional README.md file that would be suitable for this repository.`;
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      max_tokens: 2000,
-      temperature: 0.7,
-    });
-
-    return completion.choices[0]?.message?.content || 'Failed to generate README content.';
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    throw new Error('Failed to generate README with AI. Please check your OpenAI API configuration.');
+    return NextResponse.json(
+      { error: 'An unexpected error occurred while generating the README' },
+      { status: 500 }
+    );
   }
 }
