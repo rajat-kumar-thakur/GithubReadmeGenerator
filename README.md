@@ -24,7 +24,7 @@ A modern Next.js application that generates comprehensive README files for GitHu
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone (https://github.com/rajat-kumar-thakur/GithubReadmeGenerator)
 cd ai-readme-generator
 ```
 
